@@ -1,167 +1,213 @@
-#include <Servo.h> // Inclui a biblioteca Servo para controlar servomotores
-#include <LiquidCrystal_I2C.h> // Inclui a biblioteca LiquidCrystal_I2C para controlar um LCD
+#include <Servo.h>
+#include <LiquidCrystal.h> // Inclui a biblioteca LiquidCrystal_I2C para controlar um LCD
 
-Servo meuServo1; // Cria um objeto Servo chamado meuServo1
-Servo meuServo2; // Cria um objeto Servo chamado meuServo2
+Servo ServoPort; // Cria um objeto servo para o primeiro servo (pino 9)
+Servo ServoPrat; // Cria um objeto servo para o segundo servo (pino 8)
 
-LiquidCrystal_I2C lcd(0x27, 16, 2); // Cria um objeto lcd. O endereço 0x27 pode variar
+// Constantes
+const int PosHoPart = 90;  // Posição Horiz da prateleira
+const int PosDePart = 58; // Posição Deitada da prateleira
+const int RefTemp = 11;   // temperatura referencia a manter (11ºC)
+// ---------
 
-int posicaoPrimaria = 0; // Define a posição primária do servo
-int posicaoSecundaria = 90; // Define a posição secundária do servo
-int tempo = 1; // Define o tempo de espera entre movimentos do servo
+// Entradas
+const int PSpir = 13;
+const int PDht11 = A0;
+const int PFDCPorta = 1;
+const int PinServoPrat = 8;
+const int PinServoPort = 9;
+const int PBotao = 2;
+// ---------
 
-unsigned long tempoAnterior = 0; // Variável para guardar o tempo anterior
-unsigned long intervalo = 20; // Define o intervalo de tempo
+// Saidas
+const int PLuz = 11;
+const int PLuzPorta = 10;
+const int PArref = 4;
+const int PBuz = 7;
+// ---------
 
+// Variaveis
+bool VSpir = 0; // se for igual a 1 ha movimento
+bool VBotao = 0;
+bool VBuz = 0;
+int VTemp = 0; // Variável para guardar a temperatura
+bool VLuz = 0;
+bool VLuzPorta = 0;
+bool VArref = 0;
+bool VFDCPorta = 0;
+int VServoPort = 0;
+int VServoPrat = 0;
+int Vtone = 0;
+String VLcd1 = "";
+String VLcd2 = "";
+// ---------
+
+LiquidCrystal lcd(12, 6, 5, 3, A2, A4); // Cria um objeto lcd. O endereço 0x27 pode variar
+// Variaveis de Controlo
 float leitura_sensor = 0; // Variável para guardar a leitura do sensor
-int temperatura = 0; // Variável para guardar a temperatura
-float temperaturaAnterior = 0.0; // Variável para guardar a temperatura anterior
-int botaoPin = 2; // Define o pino do botão
+bool estadoPorta = false; // Estado atual do primeiro servo
+unsigned long momentodeClique = 0;
+bool botaoPressionado = false;
+long tempoDeEspera = 4000;
+unsigned long tempoAnterior = 0;
+long tempoDeTroca = 4000; // Tempo de troca de posição do segundo servo
+long lcdUpdateTime = 0;
+long tempoDeAviso = 0;
+// ---------
 
-const int servo1Pin = 9; // Define o pino do servo 1
-const int servo2Pin = 8; // Define o pino do servo 2
-const int piezoPin = 7; // Define o pino do piezo
-
-bool emPosicaoSecundaria = false; // Variável booleana para verificar se o servo está na posição secundária
-unsigned long tempoEspera = 0; // Variável para guardar o tempo de espera
-
-void setup() { // Função setup, executada uma vez quando o programa começa
-  meuServo1.attach(servo1Pin); // Anexa o servo 1 ao pino definido
-  meuServo2.attach(servo2Pin); // Anexa o servo 2 ao pino definido
-  meuServo1.write(posicaoPrimaria); // Move o servo 1 para a posição primária
-  meuServo2.write(posicaoPrimaria); // Move o servo 2 para a posição primária
-  meuServo1.write(posicaoSecundaria); // Move o servo 1 para a posição secundária
-  meuServo2.write(posicaoSecundaria); // Move o servo 2 para a posição secundária
-
-  Serial.begin(9600); // Inicia a comunicação serial a 9600 bps
-  pinMode(A0, INPUT); // Define o pino A0 como entrada
-  pinMode(13, OUTPUT); // Define o pino 13 como saída
-  pinMode(4, OUTPUT); // Define o pino 4 como saída
-  pinMode(10, OUTPUT); // Define o pino 10 como saída
-  pinMode(5, INPUT); // Define o pino 5 como entrada
-  pinMode(botaoPin, INPUT); // Define o pino do botão como entrada
-  pinMode(11, OUTPUT); // Define o pino 11 como saída
-  pinMode(piezoPin, OUTPUT); // Define o pino do piezo como saída
-
-  lcd.init(); // Inicia o LCD
-  lcd.backlight(); // Liga a luz de fundo do LCD
+void setup()
+{
+  Serial.begin(9600);
+  ServoPort.attach(PinServoPort); // O primeiro servo está conectado ao pino digital 9
+  ServoPrat.attach(PinServoPrat); // O segundo servo está conectado ao pino digital 8
+  pinMode(PBotao, INPUT);         // Configura o pino do botão como entrada
+  pinMode(PSpir, INPUT);
+  pinMode(PDht11, INPUT);
+  pinMode(PLuz, OUTPUT);
+  pinMode(PLuzPorta, OUTPUT);
+  pinMode(PBuz, OUTPUT);
+  pinMode(PArref, OUTPUT);
+  lcd.begin(16, 2);
   lcd.clear(); // Limpa o LCD
-  lcd.setCursor(0, 0); // Posiciona o cursor no início do LCD
-  lcd.print("Sistema a Ligar"); // Imprime "Sistema a Ligar" no LCD
-
-  digitalWrite(7, LOW); // Define o pino 7 como LOW
+ 
 }
 
-void lersensor() { // Função para ler o sensor
-  leitura_sensor = analogRead(A0); // Lê o valor analógico do pino A0
-  botaoPin = digitalRead(2); // Lê o valor digital do pino 2
-  temperatura = map(leitura_sensor, 20, 358, -40, 125); // Mapeia a leitura do sensor para uma temperatura
+// ------------------------------------------------------- LOOP <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+void loop()
+{
+  lerEntradas();
+  if (VBotao == HIGH && !botaoPressionado)
+  {
+    momentodeClique = millis();
+    botaoPressionado = true;
+  }
+  if (botaoPressionado && momentodeClique + tempoDeEspera <= millis())
+  {
+    changePortaStatus(); // Função para alterar o estado da porta
+    momentodeClique = 0;
+    botaoPressionado = false;
+  }
+  // Verifica se passaram 10 segundos desde a última troca de posição do segundo servo
+  if (!estadoPorta && millis() - tempoAnterior >= tempoDeTroca)
+  {
+    changeSecondServoPos();   // Troca a posição do segundo servo
+    tempoAnterior = millis(); // Atualiza o tempo da última troca
+  }
+  if (!estadoPorta)
+  {
+    controloTemperatura();
+  }
+  if (estadoPorta && tempoDeAviso != 0 && tempoDeAviso + 10000 <= millis())
+  {
+    Vtone = 440;
+    if (VBotao)
+    {
+      Vtone = 0;
+      tempoDeAviso = 0;
+    }
+  }
+  atualizarLCD();
+  atualizarSaidas();
+}
+// ------------------------------------------------------- Fim de LOOP <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+void controloTemperatura()
+{
+  VLcd2 = "";
+  VLcd1 = "Temperatura: "; // Imprime "Temperatura: " no LCD
+  VLcd1 += VTemp;          // Imprime a temperatura no LCD
+  if (VTemp > RefTemp)
+  {                         // Se a temperatura for maior q 11
+    VArref = HIGH;          // Define o pino PArref como HIGH
+    VLcd2 = "Muito Quente"; // Imprime "Muito Quente" no LCD
+  }
+  else if (VTemp < RefTemp)
+  {                       // Se a temperatura for menor ou igual a 10
+    VArref = LOW;         // Define o pino PArref como LOW
+    VLcd2 = "Muito Frio"; // Imprime "Muito Frio" no LCD
+  }
 }
 
-void controloTemperatura() { // Função para controlar a temperatura
-  if (botaoPin == LOW) { // Se o botão estiver pressionado
-    digitalWrite(10, LOW); // Define o pino 10 como LOW
-
-    if (temperatura >= 11) { // Se a temperatura for maior ou igual a 11
-      digitalWrite(13, LOW); // Define o pino 13 como LOW
-      digitalWrite(4, HIGH); // Define o pino 4 como HIGH
-    } else if (temperatura <= 10) { // Se a temperatura for menor ou igual a 10
-      digitalWrite(13, HIGH); // Define o pino 13 como HIGH
-      digitalWrite(4, LOW); // Define o pino 4 como LOW
-    }
-
-    if (temperatura != temperaturaAnterior || temperatura == 0) { // Se a temperatura mudou ou é 0
-      lcd.clear(); // Limpa o LCD
-      lcd.setCursor(0, 0); // Posiciona o cursor no início do LCD
-      lcd.print("Temperatura: "); // Imprime "Temperatura: " no LCD
-      lcd.print(temperatura); // Imprime a temperatura no LCD
-      temperaturaAnterior = temperatura; // Atualiza a temperatura anterior
-    }
-
+void atualizarLCD()
+{
+  if (lcdUpdateTime + 500 < millis())
+  {
+    lcd.clear();         // Limpa o LCD
+    lcd.setCursor(0, 0); // Posiciona o cursor na segunda linha do LCD
+    lcd.print(VLcd1);
     lcd.setCursor(0, 1); // Posiciona o cursor na segunda linha do LCD
-
-    if (temperatura > 11) { // Se a temperatura for maior que 11
-      lcd.print("Muito Quente"); // Imprime "Muito Quente" no LCD
-    } else if (temperatura < 10) { // Se a temperatura for menor que 10
-      lcd.print("Muito Frio"); // Imprime "Muito Frio" no LCD
-    }
+    lcd.print(VLcd2);
+    lcdUpdateTime = millis();
   }
 }
 
-void estadodobotao() { // Função para verificar o estado do botão
-  digitalWrite(10, HIGH); // Define o pino 10 como HIGH
-  digitalWrite(13, HIGH); // Define o pino 13 como HIGH
-  digitalWrite(4, LOW); // Define o pino 4 como LOW
-  digitalWrite(11, HIGH); // Liga a lâmpada
-
-  lcd.clear(); // Limpa o LCD
-  lcd.setCursor(0, 1); // Posiciona o cursor na segunda linha do LCD
-  lcd.print("Porta Aberta "); // Imprime "Porta Aberta " no LCD
-  temperatura = 0; // Reseta a temperatura
-  temperaturaAnterior = 0; // Reseta a temperatura anterior
-  meuServo1.write(posicaoSecundaria); // Move o servo 1 para a posição secundária
-  meuServo2.write(posicaoSecundaria); // Move o servo 2 para a posição secundária
+void lerEntradas()
+{
+  VFDCPorta = digitalRead(PFDCPorta);
+  VSpir = digitalRead(PSpir);
+  VBotao = digitalRead(PBotao);
+  VTemp = 15;
+  VServoPort = ServoPort.read();
+  VServoPrat = ServoPrat.read();
 }
 
-void loop() { // Função loop, executada repetidamente
-  unsigned long tempoAtual = millis(); // Obtém o tempo atual
+void atualizarSaidas()
+{
+  LCDpoupanca();
+  digitalWrite(PSpir, VSpir);
+  digitalWrite(PLuz, VLuz);
+  digitalWrite(PLuzPorta, VLuzPorta);
+  digitalWrite(PArref, VArref);
+  digitalWrite(PBuz, VBuz);
+  ServoPort.write(VServoPort);
+  ServoPrat.write(VServoPrat);
+  if (Vtone != 0)
+    tone(PBuz, Vtone);
+  else
+    noTone(PBuz);
+}
 
-  if (!emPosicaoSecundaria) { // Se o servo não estiver na posição secundária
-    if (tempoAtual - tempoAnterior >= intervalo) { // Se o tempo atual menos o tempo anterior for maior ou igual ao intervalo
-      tempoAnterior = tempoAtual; // Atualiza o tempo anterior
-      int pos = meuServo1.read(); // Lê a posição do servo 1
-      if (pos < posicaoSecundaria) { // Se a posição for menor que a posição secundária
-        meuServo1.write(pos + tempo); // Move o servo 1 para a posição atual mais o tempo
-        meuServo2.write(pos + tempo); // Move o servo 2 para a posição atual mais o tempo
-      } else {
-        emPosicaoSecundaria = true; // Define que o servo está na posição secundária
-        tempoEspera = tempoAtual + 3000; // Define o tempo de espera para 3 segundos
-      }
-    }
-  } 
-  else {
-    if (tempoAtual >= tempoEspera) { // Se o tempo atual for maior ou igual ao tempo de espera
-      int pos = meuServo1.read(); // Lê a posição do servo 1
-      if (pos > posicaoPrimaria) { // Se a posição for maior que a posição primária
-        meuServo1.write(pos - tempo); // Move o servo 1 para a posição atual menos o tempo
-        meuServo2.write(pos - tempo); // Move o servo 2 para a posição atual menos o tempo
-      } 
-      else {
-        emPosicaoSecundaria = false; // Define que o servo não está na posição secundária
-        tempoEspera = tempoAtual + 3000; // Define o tempo de espera para 3 segundos
-      }
-    }
+void LCDpoupanca()
+{
+  if (VSpir) {lcd.display();return;}
+  lcd.noDisplay();
+}
 
-    lersensor(); // Chama a função para ler o sensor
-    controloTemperatura(); // Chama a função para controlar a temperatura
-
-
-    if(digitalRead(2) == HIGH) { // Se o botão estiver pressionado
-  estadodobotao(); // Chama a função para verificar o estado do botão
-  unsigned long inicioEspera = millis(); // Obtém o tempo atual
-  while (millis() - inicioEspera < 5000) { // Enquanto o tempo atual menos o tempo de início da espera for menor que 5000 ms (5 segundos)
-    if (digitalRead(2) == LOW) { // Se o botão não estiver pressionado
-      break; // Sai do loop
-    }
+void changePortaStatus()
+{
+  if (!estadoPorta)
+  {
+    estadoPorta = true; // Atualiza o estado para Porta Aberta
+    VServoPort = 0;
+    VLuz = 1;
+    VServoPrat = PosHoPart;
+    VLcd1 = "Porta Aberta"; // Imprime "Porta Aberta " no LCD
+    VLcd2 = "";
+    VLuzPorta = 1;
+    VArref = 0;
+    tempoDeAviso = millis();
   }
-  if (millis() - inicioEspera >= 5000) { // Se o tempo atual menos o tempo de início da espera for maior ou igual a 5000 ms (5 segundos)
-    tone(piezoPin, 1000); // Toca um tom no piezo
-  }
-}
-else { // Se o botão não estiver pressionado
-  digitalWrite(2, LOW); // Define o pino 2 como LOW
-  digitalWrite(11, LOW); // Define o pino 11 como LOW
-  noTone(piezoPin); // Para o piezo
-}
+  else
+  {
+    VServoPort = 90;     // Move o primeiro servo de volta para 90 graus (porta trancada)
+    estadoPorta = false; // Atualiza o estado para Porta Fechada
+    controloTemperatura();
+    VLuz = 0;
+    VLuzPorta = 0;
+    VBuz = 0; // Para o piezo
+    VTemp = 0;
   }
 }
 
-
-
-
-
-
-
-
-
-
+void changeSecondServoPos()
+{
+  if (VServoPrat == PosHoPart)
+  {
+    VServoPrat = PosDePart; // Move o segundo servo para 90 graus
+  }
+  else
+  {
+    VServoPrat = PosHoPart; // Move o segundo servo de volta para 0 graus
+  }
+}
